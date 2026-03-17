@@ -6293,54 +6293,78 @@ def _execute_paper_draft(
         except Exception as exc:
             logger.warning("P3: Pre-verification failed, using original bib: %s", exc)
 
-    candidates_text = _read_prior_artifact(run_dir, "candidates.jsonl")
+    candidates_text = (
+        _read_prior_artifact(run_dir, "shortlist.jsonl")
+        or _read_prior_artifact(run_dir, "candidates.jsonl")
+    )
     if candidates_text:
-        cite_lines: list[str] = []
+        import re as _re_cite
+
+        candidate_rows: list[dict[str, Any]] = []
         for row_text in candidates_text.strip().splitlines():
             row = _safe_json_loads(row_text, {})
             if isinstance(row, dict) and row.get("cite_key"):
-                authors_info = ""
-                if isinstance(row.get("authors"), list) and row["authors"]:
-                    first_author = row["authors"][0]
-                    if isinstance(first_author, dict):
-                        authors_info = first_author.get("name", "")
-                    elif isinstance(first_author, str):
-                        authors_info = first_author
-                    if len(row["authors"]) > 1:
-                        authors_info += " et al."
-                title = row.get("title", "")
-                cite_lines.append(
-                    f"- [{row['cite_key']}] → TITLE: \"{title}\" "
-                    f"| {authors_info} "
-                    f"({row.get('venue', '')}, {row.get('year', '')}, "
-                    f"cited {row.get('citation_count', 0)} times) "
-                    f"| ONLY cite this key when discussing: {title}"
-                )
+                candidate_rows.append(row)
+
+        topic_text = str(config.research.topic or "").lower()
+        topic_terms = {
+            tok for tok in _re_cite.findall(r"[a-zA-Z][a-zA-Z\-]{2,}", topic_text)
+            if tok not in {
+                "that", "this", "with", "from", "have", "been", "their", "into", "using",
+                "large", "language", "models", "model", "human", "behaviors", "behavior"
+            }
+        }
+        preferred_terms = {
+            "human-likeness", "humanlike", "human-like", "believability", "rationality",
+            "consistency", "diversity", "role-playing", "roleplay", "simulation",
+            "sociological", "mobility", "shopping", "qa", "question", "answer",
+            "agent", "agents", "llm", "evaluation", "benchmark", "turing"
+        }
+
+        def _row_score(row: dict[str, Any]) -> tuple[int, int, int, int]:
+            title = str(row.get("title", "")).lower()
+            abstract = str(row.get("abstract", "")).lower()
+            venue = str(row.get("venue", "")).lower()
+            text = f"{title} {abstract} {venue}"
+            overlap = sum(1 for t in topic_terms if t in text)
+            preferred = sum(1 for t in preferred_terms if t in text)
+            citation_count = int(row.get("citation_count", 0) or 0)
+            year = int(row.get("year", 0) or 0)
+            return (preferred, overlap, citation_count, year)
+
+        # Bound only the number of candidate references; do not truncate entries.
+        candidate_rows.sort(key=_row_score, reverse=True)
+        candidate_rows = candidate_rows[:32]
+
+        cite_lines: list[str] = []
+        for row in candidate_rows:
+            authors_info = ""
+            authors = row.get("authors")
+            if isinstance(authors, list) and authors:
+                first_author = authors[0]
+                if isinstance(first_author, dict):
+                    authors_info = str(first_author.get("name", ""))
+                elif isinstance(first_author, str):
+                    authors_info = first_author
+                if len(authors) > 1:
+                    authors_info += " et al."
+            title = str(row.get("title", ""))
+            venue = str(row.get("venue", ""))
+            cite_lines.append(
+                f"- [{row['cite_key']}] → TITLE: \"{title}\" | {authors_info} | ({venue}, {row.get('year', '')}, cited {row.get('citation_count', 0)} times) | ONLY cite this key when discussing: {title}"
+            )
         if cite_lines:
             citation_instruction = (
-                "\n\nAVAILABLE REFERENCES (use [cite_key] to cite in the text):\n"
+                "\n\nAVAILABLE REFERENCES (screened shortlist; use [cite_key] to cite in the text):\n"
                 + "\n".join(cite_lines)
                 + "\n\nCRITICAL CITATION RULES:\n"
                 "- In the body text, cite using [cite_key] format, e.g. [smith2024transformer].\n"
                 "- Do NOT write a References section — it will be auto-generated from the bibliography file.\n"
-                "- Do NOT invent any references or arXiv IDs not in the above list.\n"
+                "- Do NOT invent any references or arXiv IDs not in the shortlist above.\n"
                 "- You may cite a subset, but NEVER fabricate citations or change arXiv IDs.\n"
-                "- SEMANTIC MATCHING: Before citing a reference, verify that its TITLE matches\n"
-                "  the concept you are discussing. Do NOT use an unrelated cite_key just\n"
-                "  because it sounds similar.\n"
-                "- If no reference in the list matches the concept you want to cite,\n"
-                "  write 'prior work has shown...' WITHOUT a citation, rather than using\n"
-                "  a mismatched reference.\n"
-                "- Each [cite_key] MUST correspond to the paper whose title is shown\n"
-                "  next to that key in the list above. Cross-check before citing.\n"
-                "\nCITATION QUANTITY & QUALITY CONSTRAINTS:\n"
-                "- Cite 25-40 unique references in the paper body. The Related Work\n"
-                "  section alone should cite at least 15 references.\n"
-                "- Every citation MUST be directly relevant to the paper's topic.\n"
-                "- DO NOT cite papers from unrelated domains (wireless communication, "
-                "manufacturing, UAV, etc.).\n"
-                "- Prefer well-known, highly-cited papers over obscure ones.\n"
-                "- If unsure whether a paper exists or is relevant, DO NOT cite it.\n"
+                "- Before citing a reference, verify that its TITLE matches the concept you are discussing.\n"
+                "- If no shortlisted reference matches the concept, write the claim without a citation rather than using a mismatched one.\n"
+                "- Target roughly 15-25 unique citations in the paper body; prioritize relevance over quantity.\n"
             )
 
     if llm is not None:
