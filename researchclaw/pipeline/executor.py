@@ -1792,7 +1792,7 @@ def _execute_literature_screen(
 
     # --- P1-1: keyword relevance pre-filter ---
     # Before LLM screening, drop papers whose title+abstract share no keywords
-    # with the research topic.  This catches cross-domain noise cheaply.
+    # with the research topic. This catches cross-domain noise cheaply.
     topic_keywords = _extract_topic_keywords(
         config.research.topic, config.research.domains
     )
@@ -1804,62 +1804,112 @@ def _execute_literature_screen(
             continue
         title = str(row.get("title", "")).lower()
         abstract = str(row.get("abstract", "")).lower()
-        text_blob = f"{title} {abstract}"
+        venue = str(row.get("venue", "")).lower()
+        text_blob = f"{title} {abstract} {venue}"
         overlap = sum(1 for kw in topic_keywords if kw in text_blob)
-        # Require at least 2 keyword hits to survive pre-filter.
-        # A single hit (e.g. "network" in an unrelated field) is too permissive.
         if overlap >= 2:
             row["keyword_overlap"] = overlap
             filtered_rows.append(row)
         else:
             dropped_count += 1
-    # If pre-filter dropped everything, fall back to original (safety valve)
+
+    # Safety valve
     if not filtered_rows:
         filtered_rows = _parse_jsonl_rows(candidates_text)
-    # Rebuild candidates_text from filtered rows
-    candidates_text = "\n".join(
-        json.dumps(r, ensure_ascii=False) for r in filtered_rows
-    )
+
+    # Programmatic ranking before any LLM call: keep only a bounded pool.
+    # This prevents huge JSONL payloads from being sent in one prompt.
+    def _screen_score(row: dict[str, Any]) -> tuple[int, int, int, int]:
+        overlap = int(row.get("keyword_overlap", 0) or 0)
+        citation_count = int(row.get("citation_count", 0) or 0)
+        year = int(row.get("year", 0) or 0)
+        has_venue = 1 if row.get("venue") else 0
+        return (overlap, has_venue, citation_count, year)
+
+    filtered_rows.sort(key=_screen_score, reverse=True)
+    candidate_pool = filtered_rows[:120]
+
     logger.info(
-        "Domain pre-filter: kept %d, dropped %d (keywords: %s)",
+        "Domain pre-filter: kept %d, dropped %d, bounded pool=%d (keywords: %s)",
         len(filtered_rows),
         dropped_count,
+        len(candidate_pool),
         topic_keywords[:8],
     )
 
     shortlist: list[dict[str, Any]] = []
-    if llm is not None:
+    if llm is not None and candidate_pool:
         _pm = prompts or PromptManager()
-        sp = _pm.for_stage(
-            "literature_screen",
-            topic=config.research.topic,
-            domains=", ".join(config.research.domains)
-            if config.research.domains
-            else "general",
-            quality_threshold=config.research.quality_threshold,
-            candidates_text=candidates_text,
-        )
-        resp = _chat_with_prompt(
-            llm,
-            sp.system,
-            sp.user,
-            json_mode=sp.json_mode,
-            max_tokens=sp.max_tokens,
-        )
-        payload = _safe_json_loads(resp.content, {})
-        if isinstance(payload, dict) and isinstance(payload.get("shortlist"), list):
-            shortlist = [row for row in payload["shortlist"] if isinstance(row, dict)]
+        batch_size = 24
+        per_batch_keep = 8
+        llm_kept: list[dict[str, Any]] = []
+
+        for batch_idx in range(0, len(candidate_pool), batch_size):
+            batch = candidate_pool[batch_idx: batch_idx + batch_size]
+            batch_text = "\n".join(json.dumps(r, ensure_ascii=False) for r in batch)
+            sp = _pm.for_stage(
+                "literature_screen",
+                topic=config.research.topic,
+                domains=", ".join(config.research.domains)
+                if config.research.domains
+                else "general",
+                quality_threshold=config.research.quality_threshold,
+                candidates_text=batch_text,
+            )
+            resp = _chat_with_prompt(
+                llm,
+                sp.system,
+                sp.user,
+                json_mode=sp.json_mode,
+                max_tokens=sp.max_tokens,
+            )
+            payload = _safe_json_loads(resp.content, {})
+            if isinstance(payload, dict) and isinstance(payload.get("shortlist"), list):
+                rows = [row for row in payload["shortlist"] if isinstance(row, dict)]
+                rows.sort(
+                    key=lambda r: (
+                        float(r.get("relevance_score", 0) or 0),
+                        float(r.get("quality_score", 0) or 0),
+                    ),
+                    reverse=True,
+                )
+                llm_kept.extend(rows[:per_batch_keep])
+
+        # Deduplicate by cite_key/paper_id and keep the best scored items overall.
+        dedup: dict[str, dict[str, Any]] = {}
+        for row in llm_kept:
+            key = str(row.get("cite_key") or row.get("paper_id") or row.get("title") or "")
+            if not key:
+                continue
+            prev = dedup.get(key)
+            cur_score = (
+                float(row.get("relevance_score", 0) or 0),
+                float(row.get("quality_score", 0) or 0),
+            )
+            prev_score = (
+                float(prev.get("relevance_score", 0) or 0),
+                float(prev.get("quality_score", 0) or 0),
+            ) if prev else (-1.0, -1.0)
+            if prev is None or cur_score > prev_score:
+                dedup[key] = row
+        shortlist = sorted(
+            dedup.values(),
+            key=lambda r: (
+                float(r.get("relevance_score", 0) or 0),
+                float(r.get("quality_score", 0) or 0),
+                int(r.get("citation_count", 0) or 0),
+            ),
+            reverse=True,
+        )[:24]
+
     if not shortlist:
-        rows = (
-            filtered_rows[:6]
-            if filtered_rows
-            else _parse_jsonl_rows(candidates_text)[:6]
-        )
+        rows = candidate_pool[:12] if candidate_pool else _parse_jsonl_rows(candidates_text)[:12]
         for idx, item in enumerate(rows):
-            item["relevance_score"] = round(0.75 - idx * 0.04, 3)
-            item["quality_score"] = round(0.72 - idx * 0.03, 3)
-            item["keep_reason"] = "Template screened entry"
+            item["relevance_score"] = round(max(0.35, 0.88 - idx * 0.04), 3)
+            item["quality_score"] = round(max(0.30, 0.82 - idx * 0.035), 3)
+            item["keep_reason"] = "Programmatic pre-screen fallback"
             shortlist.append(item)
+
     out = stage_dir / "shortlist.jsonl"
     _write_jsonl(out, shortlist)
     return StageResult(
