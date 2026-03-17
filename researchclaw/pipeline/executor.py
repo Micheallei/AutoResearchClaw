@@ -6752,6 +6752,30 @@ def _execute_quality_gate(
     (stage_dir / "quality_report.json").write_text(
         json.dumps(report, indent=2), encoding="utf-8"
     )
+
+    score = report.get("score_1_to_10")
+    verdict = str(report.get("verdict", "")).strip().lower()
+    threshold_10 = float(config.research.quality_threshold) * 2.0
+
+    passed = True
+    if isinstance(score, (int, float)) and float(score) < threshold_10:
+        passed = False
+    if verdict in {"revise", "reject", "fail", "failed"}:
+        passed = False
+
+    if not passed:
+        return StageResult(
+            stage=Stage.QUALITY_GATE,
+            status=StageStatus.FAILED,
+            artifacts=("quality_report.json",),
+            error=(
+                f"Quality gate failed: score={score}, verdict={verdict or 'unknown'}, "
+                f"threshold={threshold_10:.1f}/10"
+            ),
+            decision="retry",
+            evidence_refs=("stage-20/quality_report.json",),
+        )
+
     return StageResult(
         stage=Stage.QUALITY_GATE,
         status=StageStatus.DONE,
@@ -7700,12 +7724,12 @@ def execute_stage(
 
     llm = None
     try:
-        if config.llm.provider == "acp":
-            llm = create_llm_client(config)
-        else:
-            candidate = LLMClient.from_rc_config(config)
-            if candidate.config.base_url and candidate.config.api_key:
-                llm = candidate
+        candidate = create_llm_client(config)
+        provider = getattr(config.llm, "provider", "")
+        if provider in {"acp", "azure-openai-aad"}:
+            llm = candidate
+        elif hasattr(candidate, "config") and getattr(candidate.config, "base_url", "") and getattr(candidate.config, "api_key", ""):
+            llm = candidate
     except Exception:  # noqa: BLE001
         llm = None
 
