@@ -119,6 +119,10 @@ class LlmConfig:
     fallback_models: tuple[str, ...] = ()
     s2_api_key: str = ""
     notes: str = ""
+    azure_endpoint: str = ""
+    azure_api_version: str = "2024-12-01-preview"
+    azure_token_scope: str = "https://cognitiveservices.azure.com/.default"
+    azure_credential: str = "azure-cli"
     acp: AcpConfig = field(default_factory=AcpConfig)
 
 
@@ -384,6 +388,9 @@ def validate_config(
         # ACP provider doesn't need base_url or api_key_env
         if llm_provider == "acp" and key in ("llm.base_url", "llm.api_key_env"):
             continue
+        # Azure AD-backed Azure OpenAI uses bearer tokens instead of API keys/base_url
+        if llm_provider == "azure-openai-aad" and key in ("llm.base_url", "llm.api_key_env"):
+            continue
         value = _get_by_path(data, key)
         if _is_blank(value):
             errors.append(f"Missing required field: {key}")
@@ -442,6 +449,10 @@ def _parse_llm_config(data: dict[str, Any]) -> LlmConfig:
         fallback_models=tuple(data.get("fallback_models") or ()),
         s2_api_key=data.get("s2_api_key", ""),
         notes=data.get("notes", ""),
+        azure_endpoint=data.get("azure_endpoint", ""),
+        azure_api_version=data.get("azure_api_version", "2024-12-01-preview"),
+        azure_token_scope=data.get("azure_token_scope", "https://cognitiveservices.azure.com/.default"),
+        azure_credential=data.get("azure_credential", "azure-cli"),
         acp=AcpConfig(
             agent=acp_data.get("agent", "claude"),
             cwd=acp_data.get("cwd", "."),

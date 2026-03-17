@@ -1,0 +1,76 @@
+project:
+  name: "human-likeness-llm-open-behavior"
+  mode: "full-auto"
+
+research:
+  topic: "A Computational Framework for Evaluating Human-likeness in LLMs' Open-ended Human Behaviors. Large Language Models (LLMs) have found widespread application and research in scenarios such as role-playing and sociological simulations. Despite the growing use of LLM-based agents to simulate human activities, the extent to which their behaviors resemble human behavior remains underexplored. As diverse LLMs proliferate, the traditional Turing test is ineffective for scalable evaluation and prone to bias from human-crafted challenges, leading to unfair assessments. In this work, we propose a novel distribution-based framework that comprehensively evaluates human-likeness and believability of AI behaviors by leveraging large-scale open-ended human behavior data from web. For better evaluation, we design generic metrics to cover three principles: rationality, consistency, and diversity. Implemented across online shopping, open-topic Q&A, and urban mobility, our framework reveals that even the currently best LLM still exhibits a significant gap from real user behavior, underscoring the necessity of comprehensive research and evaluation of AI’s human-like capabilities."
+  domains:
+    - "machine-learning"
+    - "computational-social-science"
+    - "human-ai-interaction"
+  daily_paper_count: 12
+  quality_threshold: 4.0
+
+runtime:
+  timezone: "America/Los_Angeles"
+  max_parallel_tasks: 3
+  approval_timeout_hours: 12
+  retry_limit: 2
+
+notifications:
+  channel: "console"
+  target: ""
+  on_stage_start: true
+  on_stage_fail: true
+  on_gate_required: true
+
+knowledge_base:
+  backend: "markdown"
+  root: "docs/kb"
+
+openclaw_bridge:
+  use_cron: false
+  use_message: false
+  use_memory: false
+  use_sessions_spawn: false
+  use_web_fetch: false
+  use_browser: false
+
+llm:
+  provider: "openai"
+  base_url: "https://api.openai.com/v1"
+  api_key_env: "OPENAI_API_KEY"
+  api_key: ""
+  primary_model: "gpt-4o"
+  fallback_models:
+    - "gpt-4.1"
+    - "gpt-4o-mini"
+  s2_api_key: ""
+  notes: ""
+
+security:
+  hitl_required_stages: []
+  allow_publish_without_approval: true
+  redact_sensitive_logs: true
+
+experiment:
+  mode: "sandbox"
+  time_budget_sec: 300
+  max_iterations: 8
+  metric_key: "primary_metric"
+  metric_direction: "maximize"
+  sandbox:
+    python_path: "/opt/conda/envs/researchclaw/bin/python3"
+    gpu_required: false
+    max_memory_mb: 4096
+  docker:
+    image: "researchclaw/experiment:latest"
+    gpu_enabled: false
+    memory_limit_mb: 8192
+    network_policy: "none"
+    auto_install_deps: true
+    shm_size_mb: 2048
+    keep_containers: false
+
+prompts:
+  custom_file: ""

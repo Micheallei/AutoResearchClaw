@@ -38,11 +38,12 @@ openclaw_bridge:
 # LLM Provider Configuration
 # ============================================================================
 # Supported providers:
-#   - "openai"           → OpenAI API (default base_url)
-#   - "openrouter"       → OpenRouter (access to 200+ models via single API)
-#   - "deepseek"         → DeepSeek API
+#   - "openai"            → OpenAI API (default base_url)
+#   - "openrouter"        → OpenRouter (access to 200+ models via single API)
+#   - "deepseek"          → DeepSeek API
 #   - "openai-compatible" → Any OpenAI-compatible API (requires base_url)
-#   - "acp"              → ACP agent protocol (for local agents)
+#   - "azure-openai-aad"  → Azure OpenAI using Azure AD auth (e.g. az login)
+#   - "acp"               → ACP agent protocol (for local agents)
 #
 # OpenRouter Example (https://openrouter.ai):
 #   Get your API key at https://openrouter.ai/keys
@@ -50,7 +51,7 @@ openclaw_bridge:
 #   See all models: https://openrouter.ai/models
 # ============================================================================
 llm:
-  # Provider options: "openai", "openrouter", "deepseek", "openai-compatible", "acp"
+  # Provider options: "openai", "openrouter", "deepseek", "openai-compatible", "azure-openai-aad", "acp"
   provider: "openai"
   
   # base_url is auto-set for known providers (openai, openrouter, deepseek)
@@ -58,6 +59,7 @@ llm:
   base_url: "https://api.openai.com/v1"
   
   # API key from environment variable (recommended) or direct value
+  # Not used when provider = "azure-openai-aad"
   api_key_env: "OPENAI_API_KEY"
   api_key: ""
   
@@ -65,6 +67,12 @@ llm:
   fallback_models:
     - "gpt-4.1"
     - "gpt-4o-mini"
+
+  # Azure OpenAI via Azure AD (used when provider = "azure-openai-aad")
+  azure_endpoint: ""
+  azure_api_version: "2024-12-01-preview"
+  azure_token_scope: "https://cognitiveservices.azure.com/.default"
+  azure_credential: "azure-cli"   # azure-cli | default
   
   # Semantic Scholar API key (optional, for literature search)
   s2_api_key: ""
